@@ -1,0 +1,24 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+
+-f, --filemsm: mask file name for MSM
+-m, --filemdm: mask file name for MDM
+-l, --filelist: name of file containing list of mask files
+-o, --output: output directory name
+-p, --peripheral: bit mask for the peripherals interested
+-s, --size: maximum file size in MB
+-w, --wait: waiting for directory
+-n, --number: maximum file number
+-k, --kill: kill existing instance of diag_mdlog
+-c --cleanmask: Send mask cleanup to modem at exit
+-d --disablecon: Disable console messages
+-e --enablelock: Run using wake lock to keep APPS processor on
+-b --nonrealtime: Have peripherals buffer data and send data in non-real-time
+-r --renamefiles: Rename dir/file names to time when closed
+-a --hdlcdisable: Disbale hdlc encoding
+-h, --help: usage help
+
+never change the Diag.cfg, do not create new Diag.cfg if the copy failed.
