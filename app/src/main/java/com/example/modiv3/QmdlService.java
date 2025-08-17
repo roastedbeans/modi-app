@@ -37,6 +37,11 @@ public class QmdlService extends Service {
     private Thread errorReaderThread;
     private Thread monitorThread;
     
+    // Permission and setup flags
+    private boolean permissionsEstablished = false;
+    private boolean directorySetupComplete = false;
+    private boolean configFileReady = false;
+    
     public interface QmdlCallback {
         void onStatusUpdate(String status);
         void onLogUpdate(String log);
@@ -65,16 +70,138 @@ public class QmdlService extends Service {
         super.onCreate();
         instance = this;
         
-        // GOOD: Call setup method here when Context is guaranteed to be valid
-        setupDirectories();
-        
-        // Verify folder and Diag.cfg are present and active on app load
-        updateLog("=== App Load Verification ===");
-        if (!verifyFolderAndConfig()) {
-            updateLog("WARNING: Folder or Diag.cfg verification failed on app load");
-        } else {
-            updateLog("✓ App load verification passed - ready to start");
+        // Start permission and setup process in background
+        new Thread(() -> {
+            try {
+                // Wait a moment for the app to fully initialize
+                Thread.sleep(1000);
+                
+                // Step 1: Check and establish permissions
+                if (establishPermissions()) {
+                    // Step 2: Setup directories with proper permissions
+                    if (setupDirectoriesWithRetry()) {
+                        // Step 3: Copy config file with proper error handling
+                        if (copyConfigFileWithRetry()) {
+                            // Step 4: Verify everything is ready
+                            if (verifyFolderAndConfig()) {
+                                permissionsEstablished = true;
+                                directorySetupComplete = true;
+                                configFileReady = true;
+                                updateLog("✓ All setup completed successfully - ready to start");
+                            } else {
+                                updateLog("ERROR: Final verification failed");
+                            }
+                        } else {
+                            updateLog("ERROR: Failed to copy config file after retries");
+                        }
+                    } else {
+                        updateLog("ERROR: Failed to setup directories after retries");
+                    }
+                } else {
+                    updateLog("ERROR: Failed to establish permissions");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error during setup process", e);
+                updateLog("ERROR: Setup process failed: " + e.getMessage());
+            }
+        }).start();
+    }
+    
+    /**
+     * Establish necessary permissions before proceeding
+     */
+    private boolean establishPermissions() {
+        try {
+            updateLog("=== Establishing Permissions ===");
+            
+            // Check root access first
+            if (!checkRootAccess()) {
+                updateLog("ERROR: Root access not available");
+                return false;
+            }
+            updateLog("✓ Root access confirmed");
+            
+            // Wait a moment for root to be fully established
+            Thread.sleep(500);
+            
+            // Check if we can access external storage
+            if (!canAccessExternalStorage()) {
+                updateLog("WARNING: External storage not accessible, will use fallback");
+            } else {
+                updateLog("✓ External storage accessible");
+            }
+            
+            // Wait for permissions to be fully established
+            Thread.sleep(1000);
+            
+            updateLog("✓ Permissions established successfully");
+            return true;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error establishing permissions", e);
+            updateLog("ERROR: Failed to establish permissions: " + e.getMessage());
+            return false;
         }
+    }
+    
+    /**
+     * Setup directories with retry logic
+     */
+    private boolean setupDirectoriesWithRetry() {
+        int maxRetries = 3;
+        int retryDelay = 2000; // 2 seconds
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            updateLog("Directory setup attempt " + attempt + "/" + maxRetries);
+            
+            if (setupDirectories()) {
+                updateLog("✓ Directory setup successful on attempt " + attempt);
+                return true;
+            }
+            
+            if (attempt < maxRetries) {
+                updateLog("Directory setup failed, retrying in " + (retryDelay/1000) + " seconds...");
+                try {
+                    Thread.sleep(retryDelay);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        
+        updateLog("ERROR: Directory setup failed after " + maxRetries + " attempts");
+        return false;
+    }
+    
+    /**
+     * Copy config file with retry logic
+     */
+    private boolean copyConfigFileWithRetry() {
+        int maxRetries = 3;
+        int retryDelay = 2000; // 2 seconds
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            updateLog("Config file copy attempt " + attempt + "/" + maxRetries);
+            
+            if (copyConfigFromAssets(CONFIG_FILE)) {
+                updateLog("✓ Config file copy successful on attempt " + attempt);
+                return true;
+            }
+            
+            if (attempt < maxRetries) {
+                updateLog("Config file copy failed, retrying in " + (retryDelay/1000) + " seconds...");
+                try {
+                    Thread.sleep(retryDelay);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        
+        updateLog("ERROR: Config file copy failed after " + maxRetries + " attempts");
+        return false;
     }
     
     public static QmdlService getInstance() {
@@ -100,11 +227,19 @@ public class QmdlService extends Service {
             return false;
         }
         
+        // Check if setup is complete
+        if (!permissionsEstablished || !directorySetupComplete || !configFileReady) {
+            updateStatus("Setup not complete yet, please wait...");
+            updateLog("Setup status - Permissions: " + permissionsEstablished + 
+                     ", Directory: " + directorySetupComplete + 
+                     ", Config: " + configFileReady);
+            return false;
+        }
+        
         try {
             // Reset stop flag
             shouldStop = false;
             
-            // Verification already done on app load, proceed directly
             updateStatus("Starting QMDL gathering...");
             
             // Start the diag_mdlog process
@@ -247,7 +382,7 @@ public class QmdlService extends Service {
     }
     
     /**
-     * Copy Diag.cfg file from assets to the target location
+     * Copy Diag.cfg file from assets to the target location with improved error handling
      */
     private boolean copyConfigFromAssets(String targetConfigPath) {
         try {
@@ -259,21 +394,27 @@ public class QmdlService extends Service {
                 return false;
             }
             
+            // Wait a moment to ensure permissions are fully established
+            Thread.sleep(500);
+            
             // Open the asset file and read content
             InputStream inputStream = getAssets().open("Diag.cfg");
             byte[] assetContent = new byte[inputStream.available()];
             inputStream.read(assetContent);
             inputStream.close();
             
+            updateLog("Asset file size: " + assetContent.length + " bytes");
+            
             File targetFile = new File(targetConfigPath);
             
-            // Create parent directory if it doesn't exist
+            // Ensure parent directory exists with proper permissions
             File parentDir = targetFile.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
+                updateLog("Creating parent directory: " + parentDir.getAbsolutePath());
                 boolean created = parentDir.mkdirs();
                 if (!created) {
-                    updateLog("Failed to create parent directory, trying with root access");
-                    return copyConfigWithRootAccess(targetConfigPath);
+                    updateLog("Failed to create parent directory with normal permissions, using root");
+                    return copyConfigWithRootAccess(targetConfigPath, assetContent);
                 }
             }
             
@@ -283,13 +424,19 @@ public class QmdlService extends Service {
                 outputStream.write(assetContent);
                 outputStream.close();
                 
-                updateLog("Diag.cfg copied successfully to: " + targetConfigPath);
-                logConfigFileContent(targetConfigPath);
-                return true;
+                // Verify the file was written correctly
+                if (targetFile.exists() && targetFile.length() == assetContent.length) {
+                    updateLog("Diag.cfg copied successfully to: " + targetConfigPath);
+                    logConfigFileContent(targetConfigPath);
+                    return true;
+                } else {
+                    updateLog("File copy verification failed, trying with root access");
+                    return copyConfigWithRootAccess(targetConfigPath, assetContent);
+                }
                 
             } catch (IOException e) {
-                updateLog("Normal copy failed, trying with root access: " + e.getMessage());
-                return copyConfigWithRootAccess(targetConfigPath);
+                updateLog("Normal copy failed: " + e.getMessage() + ", trying with root access");
+                return copyConfigWithRootAccess(targetConfigPath, assetContent);
             }
             
         } catch (Exception e) {
@@ -300,20 +447,14 @@ public class QmdlService extends Service {
     }
     
     /**
-     * Copy config file using root access
+     * Copy config file using root access with improved error handling
      */
-    private boolean copyConfigWithRootAccess(String targetConfigPath) {
+    private boolean copyConfigWithRootAccess(String targetConfigPath, byte[] assetContent) {
         try {
             updateLog("Copying Diag.cfg with root access...");
             
-            // Read asset content as binary - must succeed
-            InputStream inputStream = getAssets().open("Diag.cfg");
-            byte[] assetContent = new byte[inputStream.available()];
-            inputStream.read(assetContent);
-            inputStream.close();
-            
-            // For binary files, we need to write the bytes directly, not as string
-            updateLog("Asset file size: " + assetContent.length + " bytes");
+            // Wait a moment to ensure root access is fully established
+            Thread.sleep(500);
             
             // Use base64 to handle binary data
             String base64Content = android.util.Base64.encodeToString(assetContent, android.util.Base64.NO_WRAP);
@@ -322,10 +463,18 @@ public class QmdlService extends Service {
             Process process = Runtime.getRuntime().exec("su");
             OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream());
             
+            // Ensure directory exists first
+            String parentDir = new File(targetConfigPath).getParent();
+            writer.write("mkdir -p " + parentDir + " 2>/dev/null\n");
+            writer.write("chmod 777 " + parentDir + " 2>/dev/null\n");
+            
             // Write the file using base64 decode
             writer.write("echo '" + base64Content + "' | base64 -d > " + targetConfigPath + "\n");
             writer.write("chmod 666 " + targetConfigPath + "\n");
-            writer.write("echo 'COPY_RESULT:$?'\n");
+            writer.write("ls -l " + targetConfigPath + "\n");
+            writer.write("echo 'COPY_RESULT:'$?\n");
+            writer.write("echo 'FILE_EXISTS:'$(test -f " + targetConfigPath + " && echo 'YES' || echo 'NO')\n");
+            writer.write("echo 'FILE_SIZE:'$(stat -c%s " + targetConfigPath + " 2>/dev/null || echo 'ERROR')\n");
             writer.write("exit\n");
             writer.flush();
             writer.close();
@@ -333,23 +482,47 @@ public class QmdlService extends Service {
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
             boolean success = false;
+            boolean fileExists = false;
+            String fileSize = "0";
             while ((line = reader.readLine()) != null) {
+                updateLog("Root copy: " + line);
                 if (line.startsWith("COPY_RESULT:")) {
                     String result = line.split(":")[1];
                     success = result.equals("0");
-                    break;
+                } else if (line.startsWith("FILE_EXISTS:")) {
+                    String exists = line.split(":")[1];
+                    fileExists = "YES".equals(exists);
+                } else if (line.startsWith("FILE_SIZE:")) {
+                    String size = line.split(":")[1];
+                    fileSize = size;
                 }
             }
             reader.close();
             
             int exitCode = process.waitFor();
-            if (exitCode == 0 && success) {
+            
+            // Check if file actually exists and has correct size
+            File targetFile = new File(targetConfigPath);
+            boolean fileVerified = targetFile.exists() && targetFile.length() == assetContent.length;
+            
+            updateLog("Copy result - exitCode: " + exitCode + ", success: " + success + ", fileExists: " + fileExists + ", fileSize: " + fileSize + ", fileVerified: " + fileVerified);
+            
+            if (exitCode == 0 && (success || fileVerified || (fileExists && fileSize.equals(String.valueOf(assetContent.length))))) {
                 updateLog("Diag.cfg copied successfully with root access");
                 logConfigFileContent(targetConfigPath);
                 return true;
             } else {
-                updateLog("Failed to copy with root access");
-                return false;
+                // Final fallback: check if file exists and has correct size
+                Thread.sleep(500); // Wait a moment for file system
+                File finalCheck = new File(targetConfigPath);
+                if (finalCheck.exists() && finalCheck.length() == assetContent.length) {
+                    updateLog("Diag.cfg copy verified by final file check");
+                    logConfigFileContent(targetConfigPath);
+                    return true;
+                } else {
+                    updateLog("Failed to copy with root access");
+                    return false;
+                }
             }
             
         } catch (Exception e) {
@@ -538,84 +711,35 @@ public class QmdlService extends Service {
             
             // Use the current directory that was set during initial load
             String targetDir = QMDL_DIR;
-            String targetConfig = CONFIG_FILE;
             
             // If directory hasn't been set yet, use default
             if (targetDir == null || targetDir.isEmpty()) {
                 targetDir = "/sdcard/diag_logs";
-                targetConfig = "/sdcard/diag_logs/Diag.cfg";
                 updateLog("Using default directory: " + targetDir);
             }
             
             updateLog("Using directory: " + targetDir);
             
-            // Copy Diag.cfg from assets to the target location
-            if (!copyConfigFromAssets(targetConfig)) {
-                updateLog("Error: Failed to copy Diag.cfg from assets");
-                return false;
-            }
+            // Wait a moment to ensure root access is fully established
+            Thread.sleep(500);
             
-            // For external storage /sdcard/diag_logs, we need root access
-            updateLog("Checking existing directory: " + targetDir);
-            
-            // First, let's check what's actually in the external storage
-            Process checkProcess = Runtime.getRuntime().exec("su");
-            OutputStreamWriter checkWriter = new OutputStreamWriter(checkProcess.getOutputStream());
-            checkWriter.write("ls -la /sdcard/\n");
-            checkWriter.write("echo '=== Checking if diag_logs exists ==='\n");
-            checkWriter.write("ls -la /sdcard/diag_logs 2>/dev/null || echo 'diag_logs not found'\n");
-            checkWriter.write("echo '=== Current user and permissions ==='\n");
-            checkWriter.write("id\n");
-            checkWriter.write("whoami\n");
-            checkWriter.write("echo '=== External storage permissions ==='\n");
-            checkWriter.write("ls -ld /sdcard/\n");
-            checkWriter.write("exit\n");
-            checkWriter.flush();
-            checkWriter.close();
-            
-            BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream()));
-            String checkLine;
-            while ((checkLine = checkReader.readLine()) != null) {
-                updateLog("Check: " + checkLine);
-            }
-            checkReader.close();
-            
-            int checkExitCode = checkProcess.waitFor();
-            updateLog("Check process exit code: " + checkExitCode);
-            
-            // Now proceed with the actual setup
+            // Use root to create directory and set permissions
             Process process = Runtime.getRuntime().exec("su");
             OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream());
             
-            // Always create the directory if it doesn't exist
+            // Create directory and set permissions
             writer.write("echo '=== Directory Setup ==='\n");
+            writer.write("mkdir -p " + targetDir + " 2>/dev/null\n");
             writer.write("if [ -d " + targetDir + " ]; then\n");
-            writer.write("  echo 'Directory already exists'\n");
+            writer.write("  echo 'DIRECTORY_CREATED'\n");
+            writer.write("  chmod 777 " + targetDir + " 2>/dev/null\n");
+            writer.write("  chown system:system " + targetDir + " 2>/dev/null\n");
+            writer.write("  echo 'PERMISSIONS_SET'\n");
             writer.write("  ls -la " + targetDir + "\n");
-            writer.write("  echo 'Directory permissions check:'\n");
-            writer.write("  stat " + targetDir + "\n");
+            writer.write("  test -w " + targetDir + " && echo 'DIRECTORY_WRITABLE' || echo 'DIRECTORY_NOT_WRITABLE'\n");
             writer.write("else\n");
-            writer.write("  echo 'Creating directory'\n");
-            writer.write("  mkdir -p " + targetDir + " 2>&1\n");
-            writer.write("  if [ $? -eq 0 ]; then\n");
-            writer.write("    echo 'Directory created successfully'\n");
-            writer.write("    ls -la " + targetDir + "\n");
-            writer.write("  else\n");
-            writer.write("    echo 'Failed to create directory'\n");
-            writer.write("    exit 1\n");
-            writer.write("  fi\n");
+            writer.write("  echo 'DIRECTORY_FAILED'\n");
             writer.write("fi\n");
-            
-            // Set permissions
-            writer.write("echo '=== Setting Permissions ==='\n");
-            writer.write("chmod 777 " + targetDir + " 2>&1\n");
-            writer.write("chown system:system " + targetDir + " 2>&1\n");
-            writer.write("echo 'Permissions set'\n");
-            
-            // Verify the directory
-            writer.write("echo '=== Verification ==='\n");
-            writer.write("ls -la " + targetDir + "\n");
-            writer.write("test -w " + targetDir + " && echo 'Directory is writable' || echo 'Directory is NOT writable'\n");
             writer.write("exit\n");
             writer.flush();
             writer.close();
@@ -623,11 +747,15 @@ public class QmdlService extends Service {
             // Read the output
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
-            boolean directoryOk = false;
+            boolean directoryCreated = false;
+            boolean directoryWritable = false;
+            
             while ((line = reader.readLine()) != null) {
                 updateLog("Setup: " + line);
-                if (line.contains("Directory is writable")) {
-                    directoryOk = true;
+                if (line.contains("DIRECTORY_CREATED")) {
+                    directoryCreated = true;
+                } else if (line.contains("DIRECTORY_WRITABLE")) {
+                    directoryWritable = true;
                 }
             }
             reader.close();
@@ -635,24 +763,11 @@ public class QmdlService extends Service {
             int exitCode = process.waitFor();
             updateLog("Setup process exit code: " + exitCode);
             
-            if (!directoryOk) {
-                updateLog("Warning: Config file not found, but continuing...");
-            }
-            
-            updateLog("Directory setup completed successfully");
-            
-            // Additional verification - check if directory actually exists
-            try {
-                File verifyDir = new File(targetDir);
-                if (verifyDir.exists() && verifyDir.isDirectory()) {
-                    updateLog("Java verification: Directory exists and is accessible");
-                    return true;
-                } else {
-                    updateLog("Java verification: Directory does not exist or is not accessible");
-                    return false;
-                }
-            } catch (Exception e) {
-                updateLog("Java verification error: " + e.getMessage());
+            if (directoryCreated && directoryWritable) {
+                updateLog("✓ Directory setup completed successfully");
+                return true;
+            } else {
+                updateLog("ERROR: Directory setup failed - Created: " + directoryCreated + ", Writable: " + directoryWritable);
                 return false;
             }
             
@@ -794,6 +909,24 @@ public class QmdlService extends Service {
     
     public boolean isRunning() {
         return isRunning;
+    }
+    
+    /**
+     * Check if the service is ready to start QMDL gathering
+     */
+    public boolean isReady() {
+        return permissionsEstablished && directorySetupComplete && configFileReady;
+    }
+    
+    /**
+     * Get the current setup status
+     */
+    public String getSetupStatus() {
+        StringBuilder status = new StringBuilder();
+        status.append("Permissions: ").append(permissionsEstablished ? "✓" : "✗");
+        status.append(", Directory: ").append(directorySetupComplete ? "✓" : "✗");
+        status.append(", Config: ").append(configFileReady ? "✓" : "✗");
+        return status.toString();
     }
     
     /**

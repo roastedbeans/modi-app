@@ -22,3 +22,4 @@ alwaysApply: false
 -h, --help: usage help
 
 never change the Diag.cfg, do not create new Diag.cfg if the copy failed.
+This will only be using diag_mdlog, not /dev/diag port

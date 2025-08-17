@@ -1,43 +1,24 @@
 package com.example.modiv3;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import android.Manifest;
 import android.content.Intent;
 import android.content.ComponentName;
 import android.content.ServiceConnection;
 import android.os.IBinder;
-import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.View;
-import android.widget.TextView;
-import android.widget.Toast;
 import com.example.modiv3.databinding.ActivityMainBinding;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 
-public class MainActivity extends AppCompatActivity implements QmdlService.QmdlCallback, RootManager.RootCallback {
+public class MainActivity extends AppCompatActivity implements QmdlService.QmdlCallback {
 
     private ActivityMainBinding binding;
     private QmdlService qmdlService;
     private boolean isGathering = false;
-    private boolean hasRootAccess = false;
-    private boolean hasStoragePermission = false;
     private Handler mainHandler;
     private StringBuilder logBuffer = new StringBuilder();
-    
-    private static final int PERMISSION_REQUEST_CODE = 1001;
-    private static final String[] REQUIRED_PERMISSIONS = {
-        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        Manifest.permission.READ_EXTERNAL_STORAGE,
-        Manifest.permission.MANAGE_EXTERNAL_STORAGE
-    };
     
     private static final String LOG_DIRECTORY = "/sdcard/diag_logs"; // Fixed directory
     private boolean isServiceBound = false;
@@ -69,8 +50,8 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
             }
         });
 
-        // Check and request permissions on first load
-        checkAndRequestPermissions();
+        // Service will handle permissions and setup automatically
+        updateStatus("Initializing service...");
     }
     
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -82,6 +63,9 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
             qmdlService.setLogDirectory(LOG_DIRECTORY);
             isServiceBound = true;
             updateStatus("Service connected successfully");
+            
+            // Start monitoring service readiness
+            startServiceReadinessMonitor();
         }
         
         @Override
@@ -91,69 +75,42 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         }
     };
     
-
-    
-    private void checkAndRequestPermissions() {
-        updateStatus("Checking permissions...");
-        
-        // Check basic storage permissions first
-        boolean basicPermissionsGranted = true;
-        String[] basicPermissions = {
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        };
-        
-        for (String permission : basicPermissions) {
-            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-                basicPermissionsGranted = false;
-                break;
-            }
-        }
-        
-        if (basicPermissionsGranted) {
-            hasStoragePermission = true;
-            updateStatus("Basic storage permissions granted - Requesting root access...");
-            requestRootAccess();
-        } else {
-            updateStatus("Requesting storage permissions...");
-            requestStoragePermissions();
-        }
-    }
-    
-    private void requestStoragePermissions() {
-        updateStatus("Please grant storage permissions to continue...");
-        ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, PERMISSION_REQUEST_CODE);
-    }
-    
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            boolean allGranted = true;
-            for (int result : grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    allGranted = false;
+    /**
+     * Monitor service readiness and update UI accordingly
+     */
+    private void startServiceReadinessMonitor() {
+        new Thread(() -> {
+            while (qmdlService != null && !Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(1000); // Check every second
+                    
+                    if (qmdlService.isReady()) {
+                        mainHandler.post(() -> {
+                            updateStatus("Ready - Tap 'Start QMDL Gathering' to begin");
+                            binding.toggleButton.setEnabled(true);
+                        });
+                        break; // Stop monitoring once ready
+                    } else {
+                        mainHandler.post(() -> {
+                            updateStatus("Setting up service... (" + qmdlService.getSetupStatus() + ")");
+                            binding.toggleButton.setEnabled(false);
+                        });
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     break;
                 }
             }
-            
-            if (allGranted) {
-                hasStoragePermission = true;
-                updateStatus("Storage permissions granted - Requesting root access...");
-                requestRootAccess();
-            } else {
-                hasStoragePermission = false;
-                updateStatus("Storage permissions denied - Please grant permissions in Settings");
-                Toast.makeText(this, "Storage permissions are required. Please grant them in Settings.", Toast.LENGTH_LONG).show();
-            }
-        }
+        }).start();
     }
+    
+
+    
+
 
     private void startQmdlGathering() {
-        // Permissions are already checked during initial load, so we can proceed directly
         binding.toggleButton.setEnabled(false);
-        updateStatus("Starting QMDL gathering...");
+        updateStatus("Checking service readiness...");
         
         // Check if service is bound
         if (qmdlService == null) {
@@ -163,6 +120,18 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
             });
             return;
         }
+        
+        // Check if service is ready to start
+        if (!qmdlService.isReady()) {
+            mainHandler.post(() -> {
+                updateStatus("Service setup not complete yet, please wait...");
+                updateLog("Setup status: " + qmdlService.getSetupStatus());
+                binding.toggleButton.setEnabled(true);
+            });
+            return;
+        }
+        
+        updateStatus("Starting QMDL gathering...");
         
         // Run the service operation in a background thread
         new Thread(() -> {
@@ -250,158 +219,9 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         });
     }
     
-    // RootManager callback methods
-    @Override
-    public void onRootGranted() {
-        mainHandler.post(() -> {
-            hasRootAccess = true;
-            binding.toggleButton.setEnabled(true);
-            updateStatus("Root access granted - Checking diag_mdlog availability...");
-            
-            // Check if diag_mdlog is available
-            checkDiagMdlogAvailability();
-        });
-    }
-    
-    @Override
-    public void onRootDenied() {
-        mainHandler.post(() -> {
-            hasRootAccess = false;
-            binding.toggleButton.setEnabled(true);
-            updateStatus("Root access denied - Please grant root permissions");
-        });
-    }
-    
-    @Override
-    public void onRootError(String error) {
-        mainHandler.post(() -> {
-            hasRootAccess = false;
-            binding.toggleButton.setEnabled(true);
-            updateStatus("Root access error: " + error);
-        });
-    }
-
-    private void requestRootAccess() {
-        updateStatus("Requesting root access - Please grant in SuperSU/Magisk...");
-        binding.toggleButton.setEnabled(false);
-        
-        RootManager.requestRootAccess(this, this);
-    }
-    
-    private void checkDiagMdlogAvailability() {
-        new Thread(() -> {
-            // Set the QmdlUtils directory first
-            QmdlUtils.setQmdlSourceDirectory(LOG_DIRECTORY);
-            
-            // First create the directory if it doesn't exist
-            boolean directoryCreated = createModiLogsDirectory();
-            
-            // Then check prerequisites
-            String prerequisites = QmdlService.checkPrerequisites();
-            mainHandler.post(() -> {
-                if (prerequisites.equals("All prerequisites met")) {
-                    if (directoryCreated) {
-                        updateStatus("Directory created and ready - Tap 'Start QMDL Gathering' to begin");
-                    } else {
-                        updateStatus("Ready - Tap 'Start QMDL Gathering' to begin");
-                    }
-                    binding.toggleButton.setEnabled(true);
-                } else {
-                    updateStatus("Prerequisites check: " + prerequisites);
-                    // Don't show toast since this is just informational
-                }
-            });
-        }).start();
-    }
-    
-    private boolean createModiLogsDirectory() {
-        try {
-            mainHandler.post(() -> updateStatus("Checking log directory..."));
-            
-            // Check if the directory exists
-            File modiLogsDir = new File(LOG_DIRECTORY);
-            if (!modiLogsDir.exists()) {
-                // Create the directory
-                mainHandler.post(() -> updateStatus("Creating log directory..."));
-                return createModiLogsDirectoryWithRoot();
-            } else {
-                mainHandler.post(() -> updateStatus("Directory already exists"));
-                return true;
-            }
-            
-        } catch (Exception e) {
-            Log.e("MainActivity", "Error checking diag_logs directory", e);
-            mainHandler.post(() -> updateStatus("Error checking directory"));
-            return false;
-        }
-    }
-    
 
     
 
-    
-    private void continueWithPrerequisitesCheck() {
-        new Thread(() -> {
-            // Set the QmdlUtils directory
-            QmdlUtils.setQmdlSourceDirectory(LOG_DIRECTORY);
-            
-            String prerequisites = QmdlService.checkPrerequisites();
-            mainHandler.post(() -> {
-                if (prerequisites.equals("All prerequisites met")) {
-                    updateStatus("Ready - Tap 'Start QMDL Gathering' to begin");
-                    binding.toggleButton.setEnabled(true);
-                } else {
-                    updateStatus("Prerequisites check: " + prerequisites);
-                }
-            });
-        }).start();
-    }
-    
-    private boolean createModiLogsDirectoryWithRoot() {
-        try {
-            Process process = Runtime.getRuntime().exec("su");
-            OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream());
-            
-            writer.write("mkdir -p " + LOG_DIRECTORY + " 2>/dev/null\n");
-            writer.write("if [ -d " + LOG_DIRECTORY + " ]; then\n");
-            writer.write("  echo 'DIRECTORY_CREATED'\n");
-            writer.write("  chmod 777 " + LOG_DIRECTORY + " 2>/dev/null\n");
-            writer.write("  echo 'PERMISSIONS_SET'\n");
-            writer.write("  ls -la " + LOG_DIRECTORY + "\n");
-            writer.write("else\n");
-            writer.write("  echo 'DIRECTORY_FAILED'\n");
-            writer.write("fi\n");
-            writer.write("exit\n");
-            writer.flush();
-            writer.close();
-            
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String line;
-            boolean directoryCreated = false;
-            
-            while ((line = reader.readLine()) != null) {
-                if (line.contains("DIRECTORY_CREATED")) {
-                    directoryCreated = true;
-                    mainHandler.post(() -> updateStatus("Directory created with root access"));
-                }
-            }
-            reader.close();
-            
-            int exitCode = process.waitFor();
-            if (exitCode == 0 && directoryCreated) {
-                mainHandler.post(() -> updateStatus("Directory setup completed successfully"));
-                return true;
-            } else {
-                mainHandler.post(() -> updateStatus("Failed to create directory with root access"));
-                return false;
-            }
-            
-        } catch (Exception e) {
-            Log.e("MainActivity", "Error creating directory with root", e);
-            updateStatus("Error creating directory with root access");
-            return false;
-        }
-    }
     
     private void updateStatus(String status) {
         binding.statusText.setText("Status: " + status);

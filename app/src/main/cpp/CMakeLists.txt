@@ -22,11 +22,27 @@ project("modiv3")
 #
 # In order to load a library into your app from Java/Kotlin, you must call
 # System.loadLibrary() and pass the name of the library defined here;
-# for GameActivity/NativeActivity derived applications, the same library name must be
+# For GameActivity/NativeActivity derived applications, the same library name must be
 # used in the AndroidManifest.xml file.
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         native-lib.cpp)
+
+# Enable 16 KB page size support for Android 15+ compatibility
+if(ANDROID)
+    # Set alignment to 16 KB (16384 bytes) for LOAD segments
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    
+    # Add linker flags for 16 KB page size support
+    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+        -Wl,-z,relro,-z,now
+        -Wl,--hash-style=both
+    )
+endif()
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
