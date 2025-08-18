@@ -4,6 +4,12 @@
 
 MODIV3 is a comprehensive Android application designed for advanced mobile network diagnostics, data collection, and security analysis. The application leverages Qualcomm Mobile Data Logging (QMDL) technology to gather detailed network diagnostic information from mobile devices with root access, providing insights into 4G and 5G network behavior, performance metrics, and security vulnerabilities.
 
+# MODIV3 - Mobile Network Diagnostic and Analysis Platform
+
+## Overview
+
+MODIV3 is a comprehensive Android application designed for advanced mobile network diagnostics, data collection, and security analysis. The application leverages Qualcomm Mobile Data Logging (QMDL) technology to gather detailed network diagnostic information from mobile devices with root access, providing insights into 4G and 5G network behavior, performance metrics, and security vulnerabilities.
+
 ## Current Implementation
 
 ### Core Features
@@ -170,12 +176,7 @@ MODIV3 is a comprehensive Android application designed for advanced mobile netwo
 
 ### Configuration File
 
-<<<<<<< HEAD
-The app creates a basic `Diag.cfg` file with the following content:
-=======
 The application creates a `Diag.cfg` file with basic QMDL logging parameters:
-
-> > > > > > > b8147b2 (added readme file to align to the app)
 
 ```
 # Basic QMDL configuration
@@ -295,24 +296,6 @@ app/src/main/java/com/example/modiv3/
 
 <<<<<<< HEAD
 
-### Root Access Issues
-
-- Ensure your device is properly rooted
-- Check that your root manager (SuperSU, Magisk) is working
-- Grant root permissions to the app when prompted
-
-### Storage Issues
-
-- Ensure you have sufficient storage space
-- Grant storage permissions to the app
-- Check that external storage is mounted
-
-### Command Execution Issues
-
-- Verify that `diag_mdlog` is available on your device
-- Check that the device supports QMDL logging
-- # Ensure the device is not in airplane mode
-
 ### Common Issues
 
 #### Root Access Problems
@@ -321,7 +304,6 @@ app/src/main/java/com/example/modiv3/
 - **Solution**: Verify root manager (Magisk/SuperSU) is properly installed
 - **Verification**: Test with `adb shell su -c "id"`
 - **OnePlus 9 Pro**: Ensure Magisk is installed and root access is granted to the app
-  > > > > > > > b8147b2 (added readme file to align to the app)
 
 #### Storage Permission Issues
 
