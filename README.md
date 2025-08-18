@@ -54,9 +54,11 @@ An Android application for gathering QMDL (Qualcomm Mobile Data Logging) data fr
 ## File Locations
 
 ### Source Directory
+
 - QMDL files are initially saved to: `/sdcard/diag_logs/`
 
 ### Backup Directory
+
 - Backed up files are stored in: `Android/data/com.example.modiv3/files/QMDL_Logs/`
 
 ## Technical Details
@@ -70,6 +72,7 @@ An Android application for gathering QMDL (Qualcomm Mobile Data Logging) data fr
 ### Configuration File
 
 The app creates a basic `Diag.cfg` file with the following content:
+
 ```
 # Basic QMDL configuration
 log_mask_qxdm=0x1
@@ -89,16 +92,19 @@ log_mask_qxdm2=0x1
 ## Troubleshooting
 
 ### Root Access Issues
+
 - Ensure your device is properly rooted
 - Check that your root manager (SuperSU, Magisk) is working
 - Grant root permissions to the app when prompted
 
 ### Storage Issues
+
 - Ensure you have sufficient storage space
 - Grant storage permissions to the app
 - Check that external storage is mounted
 
 ### Command Execution Issues
+
 - Verify that `diag_mdlog` is available on your device
 - Check that the device supports QMDL logging
 - Ensure the device is not in airplane mode
