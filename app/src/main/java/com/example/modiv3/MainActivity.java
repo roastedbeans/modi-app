@@ -173,27 +173,7 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
                     binding.toggleButton.setText("Start QMDL Gathering");
                     binding.toggleButton.setEnabled(true);
                     
-                    // Backup the QMDL files
-                    updateStatus("Backing up QMDL files...");
-                    new Thread(() -> {
-                        boolean backupSuccess = QmdlUtils.backupQmdlFiles(MainActivity.this);
-                        mainHandler.post(() -> {
-                            if (backupSuccess) {
-                                long fileSize = QmdlUtils.getQmdlFilesSize();
-                                String sizeStr = QmdlUtils.formatFileSize(fileSize);
-                                String[] filesList = QmdlUtils.getQmdlFilesList();
-                                String filesInfo = filesList.length > 0 ? " (" + filesList.length + " files)" : "";
-                                updateStatus("QMDL gathering stopped. Files backed up (" + sizeStr + filesInfo + ")");
-                            } else {
-                                String[] filesList = QmdlUtils.getQmdlFilesList();
-                                if (filesList.length > 0) {
-                                    updateStatus("QMDL gathering stopped. Backup failed but files exist: " + filesList.length + " files");
-                                } else {
-                                    updateStatus("QMDL gathering stopped. No files found to backup");
-                                }
-                            }
-                        });
-                    }).start();
+                    updateStatus("QMDL gathering stopped successfully");
                 } else {
                     binding.toggleButton.setEnabled(true);
                     updateStatus("Failed to stop QMDL gathering");
@@ -226,6 +206,8 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
     private void updateStatus(String status) {
         binding.statusText.setText("Status: " + status);
     }
+
+
 
     private void updateLog(String log) {
         logBuffer.append(log).append("\n");
