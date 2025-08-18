@@ -4,12 +4,6 @@
 
 MODIV3 is a comprehensive Android application designed for advanced mobile network diagnostics, data collection, and security analysis. The application leverages Qualcomm Mobile Data Logging (QMDL) technology to gather detailed network diagnostic information from mobile devices with root access, providing insights into 4G and 5G network behavior, performance metrics, and security vulnerabilities.
 
-# MODIV3 - Mobile Network Diagnostic and Analysis Platform
-
-## Overview
-
-MODIV3 is a comprehensive Android application designed for advanced mobile network diagnostics, data collection, and security analysis. The application leverages Qualcomm Mobile Data Logging (QMDL) technology to gather detailed network diagnostic information from mobile devices with root access, providing insights into 4G and 5G network behavior, performance metrics, and security vulnerabilities.
-
 ## Current Implementation
 
 ### Core Features
@@ -293,8 +287,6 @@ app/src/main/java/com/example/modiv3/
 - **Performance Testing**: Memory and CPU usage optimization
 
 ## Troubleshooting
-
-<<<<<<< HEAD
 
 ### Common Issues
 
