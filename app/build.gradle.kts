@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    id("com.chaquo.python") version "15.0.1"
 }
 
 android {
@@ -14,6 +15,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+        }
     }
 
     buildTypes {
@@ -37,6 +42,12 @@ android {
     }
     buildFeatures {
         viewBinding = true
+    }
+
+    chaquopy {
+        defaultConfig {
+            version = "3.8"
+        }
     }
 }
 

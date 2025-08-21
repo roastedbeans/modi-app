@@ -16,12 +16,14 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
 
     private ActivityMainBinding binding;
     private QmdlService qmdlService;
+    private PythonIntegrationService pythonService;
     private boolean isGathering = false;
     private Handler mainHandler;
     private StringBuilder logBuffer = new StringBuilder();
-    
+
     private static final String LOG_DIRECTORY = "/sdcard/diag_logs"; // Fixed directory
     private boolean isServiceBound = false;
+    private boolean isPythonServiceBound = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -32,10 +34,15 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
 
         mainHandler = new Handler(Looper.getMainLooper());
         
-        // Start and bind to the service to get proper Context
+        // Start and bind to the QMDL service to get proper Context
         Intent serviceIntent = new Intent(this, QmdlService.class);
         startService(serviceIntent);
         bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE);
+
+        // Start and bind to the Python integration service
+        Intent pythonServiceIntent = new Intent(this, PythonIntegrationService.class);
+        startService(pythonServiceIntent);
+        bindService(pythonServiceIntent, pythonServiceConnection, BIND_AUTO_CREATE);
 
         // Set up the toggle button
         binding.toggleButton.setOnClickListener(new View.OnClickListener() {
@@ -51,7 +58,7 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         });
 
         // Service will handle permissions and setup automatically
-        updateStatus("Initializing service...");
+        updateLog("Initializing service...");
     }
     
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -62,16 +69,42 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
             qmdlService.setCallback(MainActivity.this);
             qmdlService.setLogDirectory(LOG_DIRECTORY);
             isServiceBound = true;
-            updateStatus("Service connected successfully");
-            
+            updateLog("QMDL Service connected successfully");
+
+            // Connect Python service to QMDL service if available
+            if (pythonService != null) {
+                qmdlService.setPythonService(pythonService);
+            }
+
             // Start monitoring service readiness
             startServiceReadinessMonitor();
         }
-        
+
         @Override
         public void onServiceDisconnected(ComponentName name) {
             qmdlService = null;
             isServiceBound = false;
+        }
+    };
+
+    private ServiceConnection pythonServiceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder binder) {
+            PythonIntegrationService.LocalBinder localBinder = (PythonIntegrationService.LocalBinder) binder;
+            pythonService = localBinder.getService();
+            isPythonServiceBound = true;
+            updateLog("Python Service connected successfully");
+
+            // Connect Python service to QMDL service if available
+            if (qmdlService != null) {
+                qmdlService.setPythonService(pythonService);
+            }
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            pythonService = null;
+            isPythonServiceBound = false;
         }
     };
     
@@ -86,13 +119,13 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
                     
                     if (qmdlService.isReady()) {
                         mainHandler.post(() -> {
-                            updateStatus("Ready - Tap 'Start QMDL Gathering' to begin");
+                        
                             binding.toggleButton.setEnabled(true);
                         });
                         break; // Stop monitoring once ready
                     } else {
                         mainHandler.post(() -> {
-                            updateStatus("Setting up service... (" + qmdlService.getSetupStatus() + ")");
+                          
                             binding.toggleButton.setEnabled(false);
                         });
                     }
@@ -110,12 +143,10 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
 
     private void startQmdlGathering() {
         binding.toggleButton.setEnabled(false);
-        updateStatus("Checking service readiness...");
         
         // Check if service is bound
         if (qmdlService == null) {
             mainHandler.post(() -> {
-                updateStatus("Service not ready, please wait...");
                 binding.toggleButton.setEnabled(true);
             });
             return;
@@ -124,14 +155,11 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         // Check if service is ready to start
         if (!qmdlService.isReady()) {
             mainHandler.post(() -> {
-                updateStatus("Service setup not complete yet, please wait...");
                 updateLog("Setup status: " + qmdlService.getSetupStatus());
                 binding.toggleButton.setEnabled(true);
             });
             return;
         }
-        
-        updateStatus("Starting QMDL gathering...");
         
         // Run the service operation in a background thread
         new Thread(() -> {
@@ -144,7 +172,7 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
                     binding.toggleButton.setEnabled(true);
                 } else {
                     binding.toggleButton.setEnabled(true);
-                    updateStatus("Failed to start QMDL gathering");
+                   
                 }
             });
         }).start();
@@ -152,12 +180,10 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
 
     private void stopQmdlGathering() {
         binding.toggleButton.setEnabled(false);
-        updateStatus("Stopping QMDL gathering...");
         
         // Check if service is bound
         if (qmdlService == null) {
             mainHandler.post(() -> {
-                updateStatus("Service not ready, please wait...");
                 binding.toggleButton.setEnabled(true);
             });
             return;
@@ -172,19 +198,11 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
                     isGathering = false;
                     binding.toggleButton.setText("Start QMDL Gathering");
                     binding.toggleButton.setEnabled(true);
-                    
-                    updateStatus("QMDL gathering stopped successfully");
                 } else {
                     binding.toggleButton.setEnabled(true);
-                    updateStatus("Failed to stop QMDL gathering");
                 }
             });
         }).start();
-    }
-
-    @Override
-    public void onStatusUpdate(String status) {
-        mainHandler.post(() -> updateStatus(status));
     }
 
     @Override
@@ -195,7 +213,7 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
     @Override
     public void onError(String error) {
         mainHandler.post(() -> {
-            updateStatus("Error: " + error);
+            updateLog("Error: " + error);
         });
     }
     
@@ -203,9 +221,7 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
     
 
     
-    private void updateStatus(String status) {
-        binding.statusText.setText("Status: " + status);
-    }
+
 
 
 
@@ -223,11 +239,50 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         }
         
         binding.logText.setText(logBuffer.toString());
-        
+
         // Auto-scroll to bottom
-        final int scrollAmount = binding.logText.getLayout().getLineTop(binding.logText.getLineCount()) - binding.logText.getHeight();
-        if (scrollAmount > 0) {
-            binding.logText.scrollTo(0, scrollAmount);
+        if (binding.logText.getLayout() != null) {
+            final int scrollAmount = binding.logText.getLayout().getLineTop(binding.logText.getLineCount()) - binding.logText.getHeight();
+            if (scrollAmount > 0) {
+                binding.logText.scrollTo(0, scrollAmount);
+            }
+        }
+    }
+
+    // Python Integration Methods
+    private void analyzeLogsWithPython() {
+        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
+            updateLog("Running Python log analysis...");
+            qmdlService.analyzeLogsWithPython();
+        } else {
+            updateLog("Python integration not available");
+        }
+    }
+
+    private void generatePythonReport() {
+        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
+            updateLog("Generating Python analysis report...");
+            qmdlService.generatePythonReport();
+        } else {
+            updateLog("Python integration not available");
+        }
+    }
+
+    private void createPythonVisualizations() {
+        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
+            updateLog("Creating Python visualizations...");
+            qmdlService.createPythonVisualizations();
+        } else {
+            updateLog("Python integration not available");
+        }
+    }
+
+    private void extractErrorPatternsWithPython() {
+        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
+            updateLog("Extracting error patterns with Python...");
+            qmdlService.extractErrorPatternsWithPython();
+        } else {
+            updateLog("Python integration not available");
         }
     }
 
@@ -240,6 +295,10 @@ public class MainActivity extends AppCompatActivity implements QmdlService.QmdlC
         if (isServiceBound) {
             unbindService(serviceConnection);
             isServiceBound = false;
+        }
+        if (isPythonServiceBound) {
+            unbindService(pythonServiceConnection);
+            isPythonServiceBound = false;
         }
     }
 }

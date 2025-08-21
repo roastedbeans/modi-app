@@ -41,9 +41,12 @@ public class QmdlService extends Service {
     private boolean permissionsEstablished = false;
     private boolean directorySetupComplete = false;
     private boolean configFileReady = false;
+
+    // Python integration
+    private PythonIntegrationService pythonService;
+    private boolean pythonServiceBound = false;
     
     public interface QmdlCallback {
-        void onStatusUpdate(String status);
         void onLogUpdate(String log);
         void onError(String error);
     }
@@ -223,15 +226,15 @@ public class QmdlService extends Service {
     
     public boolean startQmdlGathering() {
         if (isRunning) {
-            updateStatus("QMDL gathering is already running");
+            updateLog("QMDL gathering is already running");
             return false;
         }
         
         // Check if setup is complete
         if (!permissionsEstablished || !directorySetupComplete || !configFileReady) {
-            updateStatus("Setup not complete yet, please wait...");
-            updateLog("Setup status - Permissions: " + permissionsEstablished + 
-                     ", Directory: " + directorySetupComplete + 
+            updateLog("Setup not complete yet, please wait...");
+            updateLog("Setup status - Permissions: " + permissionsEstablished +
+                     ", Directory: " + directorySetupComplete +
                      ", Config: " + configFileReady);
             return false;
         }
@@ -239,14 +242,14 @@ public class QmdlService extends Service {
         try {
             // Reset stop flag
             shouldStop = false;
-            
-            updateStatus("Starting QMDL gathering...");
-            
+
+            updateLog("Starting QMDL gathering...");
+
             // Start the diag_mdlog process
             startDiagProcess();
-            
+
             isRunning = true;
-            updateStatus("QMDL gathering started successfully");
+            updateLog("QMDL gathering started successfully");
             updateLog("diag_mdlog process started successfully");
             
             return true;
@@ -260,13 +263,13 @@ public class QmdlService extends Service {
     
     public boolean stopQmdlGathering() {
         if (!isRunning) {
-            updateStatus("QMDL gathering is not running");
+            updateLog("QMDL gathering is not running");
             return false;
         }
         
         try {
-            updateStatus("Stopping QMDL gathering...");
-            
+            updateLog("Stopping QMDL gathering...");
+
             // Set stop flag to signal threads to stop
             shouldStop = true;
             
@@ -337,7 +340,7 @@ public class QmdlService extends Service {
             }
             
             isRunning = false;
-            updateStatus("QMDL gathering stopped");
+            updateLog("QMDL gathering stopped");
             updateLog("Processes terminated. QMDL files saved to " + QMDL_DIR);
             
             return true;
@@ -782,6 +785,8 @@ public class QmdlService extends Service {
         // Use the current directory that was set during initial load
         String targetDir = QMDL_DIR;
         String targetConfig = CONFIG_FILE;
+        String maxSize = "20";
+        String maxFiles = "20";
         
         updateLog("Starting diag_mdlog with directory: " + targetDir);
         updateLog("Config file: " + targetConfig);
@@ -792,7 +797,7 @@ public class QmdlService extends Service {
         OutputStreamWriter writer = new OutputStreamWriter(suProcess.getOutputStream());
         
         // Execute the diag_mdlog command with the determined path
-        String command = "diag_mdlog -o " + targetDir + " -f " + targetConfig + " -m " + targetConfig + " &";
+        String command = "diag_mdlog -d -e -o " + targetDir + " -f " + targetConfig + " -m " + targetConfig + " -s " + maxSize + " -n " + maxFiles + " &";
         updateLog("Executing command: " + command);
         writer.write(command + "\n");
         writer.write("echo 'diag_mdlog started successfully with path: " + targetDir + "'\n");
@@ -886,12 +891,7 @@ public class QmdlService extends Service {
         monitorThread.start();
     }
     
-    private void updateStatus(String status) {
-        if (callback != null) {
-            callback.onStatusUpdate(status);
-        }
-        Log.d(TAG, "Status: " + status);
-    }
+
     
     private void updateLog(String log) {
         if (callback != null) {
@@ -1078,5 +1078,74 @@ public class QmdlService extends Service {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Python Integration Methods
+     */
+
+    public void setPythonService(PythonIntegrationService pythonService) {
+        this.pythonService = pythonService;
+        this.pythonServiceBound = (pythonService != null);
+
+        if (pythonService != null) {
+            pythonService.setCallback(new PythonIntegrationService.PythonCallback() {
+                @Override
+                public void onAnalysisComplete(String result) {
+                    updateLog("Python analysis complete: " + result);
+                }
+
+                @Override
+                public void onAnalysisError(String error) {
+                    updateLog("Python analysis error: " + error);
+                }
+            });
+            updateLog("Python integration service connected");
+        }
+    }
+
+    public void analyzeLogsWithPython() {
+        if (!pythonServiceBound || pythonService == null) {
+            updateLog("Python service not available");
+            return;
+        }
+
+        updateLog("Starting Python log analysis...");
+        pythonService.analyzeLogDirectory(QMDL_DIR);
+    }
+
+    public void generatePythonReport() {
+        if (!pythonServiceBound || pythonService == null) {
+            updateLog("Python service not available");
+            return;
+        }
+
+        updateLog("Generating Python analysis report...");
+        String reportPath = QMDL_DIR + "/python_analysis_report.json";
+        pythonService.generateAnalysisReport(reportPath);
+    }
+
+    public void createPythonVisualizations() {
+        if (!pythonServiceBound || pythonService == null) {
+            updateLog("Python service not available");
+            return;
+        }
+
+        updateLog("Creating Python visualizations...");
+        pythonService.createVisualizations();
+    }
+
+    public void extractErrorPatternsWithPython() {
+        if (!pythonServiceBound || pythonService == null) {
+            updateLog("Python service not available");
+            return;
+        }
+
+        updateLog("Extracting error patterns with Python...");
+        pythonService.extractErrorPatterns();
+    }
+
+    public boolean isPythonIntegrationAvailable() {
+        return pythonServiceBound && pythonService != null && pythonService.isPythonReady();
     }
 }
