@@ -54,8 +54,8 @@ public class PythonIntegrationService extends Service {
             python = Python.getInstance();
             Log.d(TAG, "Python instance obtained: " + (python != null ? "success" : "failed"));
             
-            qmdlBridge = python.getModule("qmdl_bridge");
-            Log.d(TAG, "QMDL bridge module loaded: " + (qmdlBridge != null ? "success" : "failed"));
+            qmdlBridge = python.getModule("qmdl_reader");
+            Log.d(TAG, "QMDL reader module loaded: " + (qmdlBridge != null ? "success" : "failed"));
             
             Log.d(TAG, "Python integration initialized successfully");
         } catch (Exception e) {

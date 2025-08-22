@@ -6,6 +6,7 @@ Based on scat project FileIO approach
 
 import os
 import datetime
+import json
 from pathlib import Path
 from fileio import FileIO
 from signaling import SignalingAnalyzer
@@ -16,6 +17,23 @@ class QmdlReader:
 
     def __init__(self):
         self.analyzer = SignalingAnalyzer()
+    
+    def _convert_datetime_to_string(self, obj):
+        """
+        Recursively convert datetime objects and bytes to strings for JSON serialization
+        """
+        if isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+        elif isinstance(obj, bytes):
+            return obj.hex()  # Convert bytes to hex string
+        elif isinstance(obj, dict):
+            return {key: self._convert_datetime_to_string(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_datetime_to_string(item) for item in obj]
+        elif isinstance(obj, (int, float, str, bool, type(None))):
+            return obj  # These types are already JSON serializable
+        else:
+            return str(obj)  # Convert any other type to string
     
     # Removed _extract_hdlc_packets - now using SCAT's proper implementation
     # SCAT's QualcommParser.run_diag() handles HDLC extraction correctly
@@ -206,3 +224,60 @@ class QmdlReader:
         except Exception as e:
             print(f"Error getting file info for {file_path}: {e}")
             return None
+    
+    # JSON serialization methods for Java integration
+    def read_qmdl_file_json(self, file_path):
+        """Read a QMDL file and return JSON serialized result"""
+        try:
+            result = self.read_qmdl_file(file_path)
+            if result:
+                # Convert datetime objects and bytes to strings for JSON serialization
+                result_serializable = self._convert_datetime_to_string(result)
+                return json.dumps(result_serializable)
+            else:
+                return json.dumps({'error': 'File too small or could not be read'})
+        except Exception as e:
+            return json.dumps({'error': str(e)})
+    
+    def process_qmdl_files_from_java_json(self, files_json):
+        """Process QMDL files provided by Java (since Java has root access) - JSON version"""
+        try:
+            files_data = json.loads(files_json)
+            result = {
+                'directory': files_data.get('directory', 'unknown'),
+                'qmdl_files_found': len(files_data.get('files', [])),
+                'files': [],
+                'source': 'java_with_root_access'
+            }
+            
+            for file_info in files_data.get('files', []):
+                # Java already filtered for 20MB+ files
+                result['files'].append({
+                    'path': file_info['path'],
+                    'size': file_info['size'],
+                    'modified': file_info.get('modified', 'unknown'),
+                    'created': file_info.get('created', 'unknown')
+                })
+            
+            return json.dumps(result)
+        except Exception as e:
+            return json.dumps({'error': str(e)})
+
+# Global reader instance for Java integration
+_reader_instance = None
+
+def get_reader():
+    """Get or create the global reader instance"""
+    global _reader_instance
+    if _reader_instance is None:
+        _reader_instance = QmdlReader()
+    return _reader_instance
+
+# Convenience functions for Java calls
+def read_qmdl_file(file_path):
+    """Convenience function for Java to read QMDL file"""
+    return get_reader().read_qmdl_file_json(file_path)
+
+def process_qmdl_files_from_java(files_json):
+    """Convenience function for Java to process QMDL files list"""
+    return get_reader().process_qmdl_files_from_java_json(files_json)
