@@ -1104,46 +1104,7 @@ public class QmdlService extends Service {
         }
     }
 
-    public void analyzeLogsWithPython() {
-        if (!pythonServiceBound || pythonService == null) {
-            updateLog("Python service not available");
-            return;
-        }
 
-        updateLog("Starting Python log analysis...");
-        pythonService.analyzeLogDirectory(QMDL_DIR);
-    }
-
-    public void generatePythonReport() {
-        if (!pythonServiceBound || pythonService == null) {
-            updateLog("Python service not available");
-            return;
-        }
-
-        updateLog("Generating Python analysis report...");
-        String reportPath = QMDL_DIR + "/python_analysis_report.json";
-        pythonService.generateAnalysisReport(reportPath);
-    }
-
-    public void createPythonVisualizations() {
-        if (!pythonServiceBound || pythonService == null) {
-            updateLog("Python service not available");
-            return;
-        }
-
-        updateLog("Creating Python visualizations...");
-        pythonService.createVisualizations();
-    }
-
-    public void extractErrorPatternsWithPython() {
-        if (!pythonServiceBound || pythonService == null) {
-            updateLog("Python service not available");
-            return;
-        }
-
-        updateLog("Extracting error patterns with Python...");
-        pythonService.extractErrorPatterns();
-    }
 
     public boolean isPythonIntegrationAvailable() {
         return pythonServiceBound && pythonService != null && pythonService.isPythonReady();

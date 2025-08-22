@@ -8,9 +8,9 @@ Comprehensive cellular signaling data formatter and analyzer
 
 import struct
 import datetime
-from collections import namedtuple, defaultdict
+from collections import defaultdict
 import binascii
-from util import parse_qxdm_ts, unwrap, lte_band_name, gsm_band_name, wcdma_band_name
+from util import lte_band_name, gsm_band_name, wcdma_band_name
 from qualcomm.qualcommparser import QualcommParser
 
 
@@ -23,7 +23,10 @@ class SignalingAnalyzer:
     def __init__(self):
         # Initialize the SCAT Qualcomm parser
         self.parser = QualcommParser()
-        # Make CRC checking less strict to handle real-world QMDL files
+        # Enable full parsing capabilities for comprehensive analysis
+        self.parser.parse_msgs = True      # Enable extended message parsing
+        self.parser.parse_events = True    # Enable event report parsing
+        # Keep CRC checking disabled for real-world QMDL files with potential corruption
         self.parser.check_crc = False
         
         # Statistics tracking
@@ -106,46 +109,296 @@ class SignalingAnalyzer:
         self.cp_packets = []  # Control plane packets (like SCAT's 'cp' channel)
         self.up_packets = []  # User plane packets (like SCAT's 'up' channel)
 
-    def extract_signaling_from_packet(self, pkt, hdlc_encoded=True, has_crc=True):
-        """
-        Extract signaling information from a raw packet
-        
-        Args:
-            pkt (bytes): Raw packet data
-            hdlc_encoded (bool): Whether packet is HDLC encoded
-            has_crc (bool): Whether packet has CRC
-            
-        Returns:
-            dict: Extracted signaling information or None
-        """
-        self.stats['total_packets'] += 1
-        
+    def setup_scat_integration(self):
+        """Set up integration with SCAT's QualcommParser.run_diag() method"""
+        # Store reference to analyzer for use in custom methods
+        self._analyzer_ref = self
+
+        # Override the postprocess_parse_result method to capture ALL parsing results
+        original_postprocess = self.parser.postprocess_parse_result
+        def enhanced_postprocess(parse_result):
+            # Call original postprocess first (for GSMTAP output)
+            original_postprocess(parse_result)
+            # Then process the detailed parsing results for measurement extraction
+            if parse_result and ('stdout' in parse_result or 'cp' in parse_result):
+                self._analyzer_ref._process_detailed_scat_result(parse_result)
+
+        self.parser.postprocess_parse_result = enhanced_postprocess
+
+        # Also create a custom writer for GSMTAP data
+        class SignalingWriter:
+            def __init__(self, analyzer):
+                self.analyzer = analyzer
+
+            def write_cp(self, sock_content, radio_id, ts):
+                """Handle control plane data from SCAT"""
+                # Extract GSMTAP information for display
+                gsmtap_info = self.analyzer._parse_gsmtap_header(sock_content)
+                if gsmtap_info:
+                    # Create a display-friendly result
+                    display_result = {
+                        'cp': [sock_content],
+                        'radio_id': radio_id,
+                        'ts': ts,
+                        'gsmtap_info': gsmtap_info,
+                        'technology': self.analyzer._detect_technology_from_arfcn(gsmtap_info.get('arfcn', 0))
+                    }
+                    self.analyzer._process_scat_parse_result(display_result)
+
+            def write_up(self, sock_content, radio_id, ts):
+                """Handle user plane data from SCAT"""
+                parse_result = {
+                    'up': [sock_content],
+                    'radio_id': radio_id,
+                    'ts': ts
+                }
+                self.analyzer._process_scat_parse_result(parse_result)
+
+        # Set the custom writer on the parser
+        self.parser.writer = SignalingWriter(self)
+
+    def _process_scat_parse_result(self, parse_result):
+        """Process parse result from SCAT's QualcommParser"""
         try:
-            # Parse the packet using SCAT parser
-            result = self.parser.parse_diag(pkt, hdlc_encoded, has_crc)
-            
-            if result:
+            # Update packet count
+            self.stats['total_packets'] += 1
+
+            if parse_result:
                 self.stats['parsed_packets'] += 1
-                
+
+                # ✅ NEW: Capture detailed stdout output from parsers
+                if 'stdout' in parse_result and parse_result['stdout']:
+                    self._process_parser_stdout(parse_result['stdout'])
+
                 # Capture PCAP-like control plane and user plane data
-                self._capture_pcap_like_data(result)
-                
+                self._capture_pcap_like_data(parse_result)
+
                 # Extract signaling information based on packet type
-                signaling_data = self._process_parsed_result(result)
-                
+                signaling_data = self._process_parsed_result(parse_result)
+
                 if signaling_data:
                     # Store signaling data for comprehensive display
                     self.all_extracted_data.append(signaling_data)
                     tech = signaling_data.get('technology', 'Unknown')
                     self.parsed_by_technology[tech].append(signaling_data)
-                    
-                    return signaling_data
-                    
+
         except Exception as e:
-            print(f"Error extracting signaling from packet: {e}")
+            print(f"Error processing SCAT parse result: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _process_detailed_scat_result(self, parse_result):
+        """Process detailed parsing results from QualcommParser (contains stdout with measurements)"""
+        try:
+            # Extract measurement data from stdout (this is where detailed info like "LTE SCell: EARFCN 1850..." comes from)
+            if 'stdout' in parse_result and parse_result['stdout']:
+                self._process_parser_stdout(parse_result['stdout'])
+
+            # Also process any CP data for GSMTAP information
+            if 'cp' in parse_result:
+                for cp_data in parse_result['cp']:
+                    # Extract technology from GSMTAP header
+                    gsmtap_info = self._parse_gsmtap_header(cp_data)
+                    if gsmtap_info:
+                        technology = self._detect_technology_from_arfcn(gsmtap_info.get('arfcn', 0))
+                        parse_result['technology'] = technology
+                        parse_result['gsmtap_info'] = gsmtap_info
+
+            # Create card data from the enhanced parse result
+            signaling_data = self._process_parsed_result(parse_result)
+            if signaling_data:
+                # Store signaling data for comprehensive display
+                self.all_extracted_data.append(signaling_data)
+                tech = signaling_data.get('technology', 'Unknown')
+                self.parsed_by_technology[tech].append(signaling_data)
+
+        except Exception as e:
+            print(f"Error processing detailed SCAT result: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _detect_technology_from_arfcn(self, arfcn):
+        """Detect technology from ARFCN value"""
+        if not arfcn or arfcn == 0:
+            return 'Unknown'
+
+        # UMTS UARFCN ranges
+        if 412 <= arfcn <= 687 or 712 <= arfcn <= 1073:
+            return 'UMTS'
+
+        # GSM ARFCN ranges (900, 1800, 1900 MHz)
+        if 1 <= arfcn <= 124 or 512 <= arfcn <= 885 or 955 <= arfcn <= 1023:
+            return 'GSM'
+
+        # LTE EARFCN ranges (simplified)
+        if 0 <= arfcn <= 60000:  # LTE typically has much higher EARFCN values
+            return 'LTE'
+
+        return 'Unknown'
+
+    def _process_parser_stdout(self, stdout_output):
+        """Process detailed stdout output from Qualcomm parsers"""
+        if not stdout_output or not stdout_output.strip():
+            return
+
+        # Process each line of stdout output
+        for line in stdout_output.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Extract measurement data from parser output
+            measurement_data = self._extract_measurement_from_line(line)
+            if measurement_data:
+                self._update_measurement_data(measurement_data)
+
+    def _extract_measurement_from_line(self, line):
+        """Extract measurement data from a single line of parser output"""
+        measurement = {}
+
+        try:
+            # LTE Serving Cell measurements
+            if line.startswith('LTE SCell:'):
+                # Format: "LTE SCell: EARFCN 1850, PCI 123, Measured RSRP -85.5, Measured RSSI -75.2"
+                parts = line.split(',')
+                for part in parts:
+                    part = part.strip()
+                    if 'EARFCN' in part:
+                        measurement['earfcn'] = int(part.split()[-1])
+                    elif 'PCI' in part:
+                        measurement['pci'] = int(part.split()[-1])
+                    elif 'RSRP' in part:
+                        rsrp_val = float(part.split()[-1])
+                        measurement['rsrp'] = rsrp_val
+                    elif 'RSSI' in part:
+                        rssi_val = float(part.split()[-1])
+                        measurement['rssi'] = rssi_val
+
+                if measurement:
+                    measurement['technology'] = 'LTE'
+                    measurement['type'] = 'serving_cell_measurement'
+                    return measurement
+
+            # LTE Neighbor Cell measurements
+            elif line.startswith('LTE NCell:'):
+                # Format: "LTE NCell: EARFCN 1850, number of cells: 3"
+                # Followed by individual cell measurements
+                if 'EARFCN' in line and 'number of cells' in line:
+                    earfcn = int(line.split('EARFCN')[1].split(',')[0].strip())
+                    return {
+                        'technology': 'LTE',
+                        'type': 'neighbor_cells_header',
+                        'earfcn': earfcn
+                    }
+
+            # UMTS measurements
+            elif line.startswith('UMTS Cell:'):
+                # Extract UMTS-specific measurements
+                if 'UARFCN' in line and 'PSC' in line:
+                    parts = line.split(',')
+                    measurement['technology'] = 'UMTS'
+                    measurement['type'] = 'serving_cell_measurement'
+                    for part in parts:
+                        part = part.strip()
+                        if 'UARFCN' in part:
+                            measurement['uarfcn'] = int(part.split()[-1])
+                        elif 'PSC' in part:
+                            measurement['psc'] = int(part.split()[-1])
+                        elif 'RSCP' in part:
+                            measurement['rscp'] = float(part.split()[-1])
+                        elif 'Ec/No' in part:
+                            measurement['ecno'] = float(part.split()[-1])
+                    return measurement
+
+            # GSM measurements
+            elif line.startswith('GSM Cell:'):
+                # Extract GSM-specific measurements
+                if 'ARFCN' in line:
+                    parts = line.split(',')
+                    measurement['technology'] = 'GSM'
+                    measurement['type'] = 'serving_cell_measurement'
+                    for part in parts:
+                        part = part.strip()
+                        if 'ARFCN' in part:
+                            measurement['arfcn'] = int(part.split()[-1])
+                        elif 'RxLev' in part:
+                            measurement['rxlev'] = float(part.split()[-1])
+                    return measurement
+
+        except Exception as e:
+            print(f"Error extracting measurement from line '{line}': {e}")
             return None
-            
+
         return None
+
+    def _update_measurement_data(self, measurement):
+        """Update internal measurement data with extracted values"""
+        tech = measurement.get('technology', 'Unknown')
+
+        # Update current state with latest measurements
+        if tech == 'LTE':
+            if 'earfcn' in measurement:
+                self.current_state['lte']['earfcn'] = measurement['earfcn']
+                self.current_state['lte']['band'] = lte_band_name(measurement['earfcn'])
+            if 'rsrp' in measurement:
+                self.signaling_info['lte']['signal_quality']['rsrp'] = measurement['rsrp']
+            if 'rssi' in measurement:
+                self.signaling_info['lte']['signal_quality']['rssi'] = measurement['rssi']
+
+        elif tech == 'UMTS':
+            if 'uarfcn' in measurement:
+                self.current_state['umts']['uarfcn'] = measurement['uarfcn']
+                self.current_state['umts']['band'] = wcdma_band_name(measurement['uarfcn'])
+            if 'rscp' in measurement:
+                self.signaling_info['umts']['signal_quality']['rscp'] = measurement['rscp']
+            if 'ecno' in measurement:
+                self.signaling_info['umts']['signal_quality']['ecno'] = measurement['ecno']
+
+        elif tech == 'GSM':
+            if 'arfcn' in measurement:
+                self.current_state['gsm']['arfcn'] = measurement['arfcn']
+                self.current_state['gsm']['band'] = gsm_band_name(measurement['arfcn'])
+            if 'rxlev' in measurement:
+                self.signaling_info['gsm']['signal_quality']['rxlev'] = measurement['rxlev']
+
+        # Add to measurement history for trend analysis
+        measurement['timestamp'] = datetime.datetime.now()
+        if not hasattr(self, 'measurement_history'):
+            self.measurement_history = []
+        self.measurement_history.append(measurement)
+
+        # Keep only last 1000 measurements to prevent memory issues
+        if len(self.measurement_history) > 1000:
+            self.measurement_history = self.measurement_history[-1000:]
+
+    def get_measurement_history(self, technology=None, limit=100):
+        """Get measurement history for analysis"""
+        if not hasattr(self, 'measurement_history'):
+            return []
+
+        history = self.measurement_history
+        if technology:
+            history = [m for m in history if m.get('technology') == technology]
+
+        return history[-limit:] if limit > 0 else history
+
+    def extract_signaling_from_packet(self, pkt, hdlc_encoded=True, has_crc=True):
+        """
+        Legacy method for manual packet processing
+        Now delegates to SCAT's proper implementation
+
+        Args:
+            pkt (bytes): Raw packet data
+            hdlc_encoded (bool): Whether packet is HDLC encoded
+            has_crc (bool): Whether packet has CRC
+
+        Returns:
+            dict: Extracted signaling information or None
+        """
+        # For backward compatibility, process manually if needed
+        return self._process_scat_parse_result(
+            self.parser.parse_diag(pkt, hdlc_encoded, has_crc)
+        )
 
     def _capture_pcap_like_data(self, result):
         """
@@ -297,29 +550,58 @@ class SignalingAnalyzer:
 
     def _process_parsed_result(self, result):
         """Process parsed result and extract signaling information"""
-        if not result or 'cp' not in result:
+        if not result:
             return None
-            
-        # Extract timestamp
+
+        # Extract basic information
         timestamp = result.get('ts', datetime.datetime.now())
         radio_id = result.get('radio_id', 0)
-        
-        # Process control plane data
+
+        # Initialize signaling data
         signaling_data = {
             'timestamp': timestamp,
             'radio_id': radio_id,
             'type': 'signaling',
-            'technology': 'Unknown',
+            'technology': result.get('technology', 'Unknown'),
             'data': {}
         }
-        
-        # Analyze the control plane data to determine technology and extract info
-        for cp_data in result['cp']:
-            tech_info = self._analyze_cp_data(cp_data)
-            if tech_info:
-                signaling_data.update(tech_info)
-                break
-                
+
+        # Check if we have GSMTAP information
+        if 'gsmtap_info' in result:
+            gsmtap_info = result['gsmtap_info']
+            technology = result.get('technology', 'Unknown')
+
+            # Extract technology-specific data based on GSMTAP info
+            if technology == 'LTE':
+                signaling_data['data'] = {
+                    'earfcn': gsmtap_info.get('arfcn', 0),
+                    'band': lte_band_name(gsmtap_info.get('arfcn', 0)) if gsmtap_info.get('arfcn') else 'Unknown',
+                    'message_type': 'RRC',
+                    'raw_data': result.get('cp', [b''])[0] if result.get('cp') else b''
+                }
+            elif technology == 'UMTS':
+                signaling_data['data'] = {
+                    'uarfcn': gsmtap_info.get('arfcn', 0),
+                    'band': wcdma_band_name(gsmtap_info.get('arfcn', 0)) if gsmtap_info.get('arfcn') else 'Unknown',
+                    'message_type': 'RRC',
+                    'raw_data': result.get('cp', [b''])[0] if result.get('cp') else b''
+                }
+            elif technology == 'GSM':
+                signaling_data['data'] = {
+                    'arfcn': gsmtap_info.get('arfcn', 0),
+                    'band': gsm_band_name(gsmtap_info.get('arfcn', 0)) if gsmtap_info.get('arfcn') else 'Unknown',
+                    'message_type': 'L3',
+                    'raw_data': result.get('cp', [b''])[0] if result.get('cp') else b''
+                }
+
+        # Process control plane data if no GSMTAP info
+        elif 'cp' in result:
+            for cp_data in result['cp']:
+                tech_info = self._analyze_cp_data(cp_data)
+                if tech_info:
+                    signaling_data.update(tech_info)
+                    break
+
         # Convert to card format if valid signaling data
         if signaling_data['technology'] != 'Unknown':
             # Use PCAP-like data for richer card information
@@ -327,6 +609,7 @@ class SignalingAnalyzer:
             card_data = self._convert_to_card_format(signaling_data, pcap_data)
             signaling_data['card_data'] = card_data
             return signaling_data
+
         return None
 
     def _analyze_cp_data(self, cp_data):
@@ -793,38 +1076,73 @@ class SignalingAnalyzer:
     def _format_lte_card_data(self, data, timestamp):
         """Format LTE signaling data for card display"""
         message_title = data.get('message_type', 'LTE Message')
-        
-        # Build description with key metrics
+
+        # Build description with key metrics - use latest current state data
         desc_parts = []
-        if 'rsrp' in data:
-            desc_parts.append(f"RSRP: {data['rsrp']} dBm")
-        if 'rsrq' in data:
-            desc_parts.append(f"RSRQ: {data['rsrq']} dB")
-        if 'pci' in data:
-            desc_parts.append(f"PCI: {data['pci']}")
-        if 'earfcn' in data:
-            desc_parts.append(f"EARFCN: {data['earfcn']}")
-            
+
+        # Check current state first (from parser stdout processing)
+        current_lte = self.current_state.get('lte', {})
+        if current_lte.get('earfcn'):
+            desc_parts.append(f"EARFCN: {current_lte['earfcn']}")
+        if 'band' in current_lte:
+            desc_parts.append(f"Band: {current_lte['band']}")
+
+        # Check signal quality from current measurements
+        lte_signal = self.signaling_info.get('lte', {}).get('signal_quality', {})
+        if lte_signal.get('rsrp'):
+            desc_parts.append(f"RSRP: {lte_signal['rsrp']} dBm")
+        if lte_signal.get('rsrq'):
+            desc_parts.append(f"RSRQ: {lte_signal['rsrq']} dB")
+        if lte_signal.get('rssi'):
+            desc_parts.append(f"RSSI: {lte_signal['rssi']} dBm")
+
+        # Fallback to packet data if no current state
+        if not desc_parts:
+            if 'rsrp' in data:
+                desc_parts.append(f"RSRP: {data['rsrp']} dBm")
+            if 'rsrq' in data:
+                desc_parts.append(f"RSRQ: {data['rsrq']} dB")
+            if 'pci' in data:
+                desc_parts.append(f"PCI: {data['pci']}")
+            if 'earfcn' in data:
+                desc_parts.append(f"EARFCN: {data['earfcn']}")
+
         description = ", ".join(desc_parts) if desc_parts else "LTE signaling data"
-        
+
         # Determine direction (simplified logic)
         direction = "DOWN" if "System" in message_title or "Configuration" in message_title else "UP"
-        
-        # Build full data
+
+        # Build comprehensive full data
         full_data = f"LTE {message_title}\n\nTimestamp: {timestamp}\n\n"
+
+        # Add current state information
+        if current_lte.get('earfcn'):
+            full_data += f"Current EARFCN: {current_lte['earfcn']}\n"
+        if 'band' in current_lte:
+            full_data += f"Current Band: {current_lte['band']}\n"
+
+        # Add signal quality information
+        if lte_signal.get('rsrp'):
+            full_data += f"Latest RSRP: {lte_signal['rsrp']} dBm\n"
+        if lte_signal.get('rsrq'):
+            full_data += f"Latest RSRQ: {lte_signal['rsrq']} dB\n"
+        if lte_signal.get('rssi'):
+            full_data += f"Latest RSSI: {lte_signal['rssi']} dBm\n"
+
+        # Add packet-specific data
         if 'cell_id' in data:
             full_data += f"Cell ID: {data['cell_id']}\n"
         if 'earfcn' in data:
-            full_data += f"EARFCN: {data['earfcn']}\n"
+            full_data += f"Packet EARFCN: {data['earfcn']}\n"
         if 'pci' in data:
             full_data += f"PCI: {data['pci']}\n"
         if 'rsrp' in data:
-            full_data += f"RSRP: {data['rsrp']} dBm\n"
+            full_data += f"Packet RSRP: {data['rsrp']} dBm\n"
         if 'rsrq' in data:
-            full_data += f"RSRQ: {data['rsrq']} dB\n"
+            full_data += f"Packet RSRQ: {data['rsrq']} dB\n"
         if 'band' in data:
             full_data += f"Band: {data['band']}\n"
-            
+
         return message_title, description, direction, full_data
 
     def _format_nr_card_data(self, data, timestamp):
@@ -859,53 +1177,117 @@ class SignalingAnalyzer:
     def _format_umts_card_data(self, data, timestamp):
         """Format UMTS signaling data for card display"""
         message_title = data.get('message_type', 'UMTS Message')
-        
+
+        # Build description with key metrics - use latest current state data
         desc_parts = []
-        if 'rscp' in data:
-            desc_parts.append(f"RSCP: {data['rscp']} dBm")
-        if 'ecno' in data:
-            desc_parts.append(f"Ec/No: {data['ecno']} dB")
-        if 'psc' in data:
-            desc_parts.append(f"PSC: {data['psc']}")
-        if 'uarfcn' in data:
-            desc_parts.append(f"UARFCN: {data['uarfcn']}")
-            
+
+        # Check current state first (from parser stdout processing)
+        current_umts = self.current_state.get('umts', {})
+        if current_umts.get('uarfcn'):
+            desc_parts.append(f"UARFCN: {current_umts['uarfcn']}")
+        if 'band' in current_umts:
+            desc_parts.append(f"Band: {current_umts['band']}")
+
+        # Check signal quality from current measurements
+        umts_signal = self.signaling_info.get('umts', {}).get('signal_quality', {})
+        if umts_signal.get('rscp'):
+            desc_parts.append(f"RSCP: {umts_signal['rscp']} dBm")
+        if umts_signal.get('ecno'):
+            desc_parts.append(f"Ec/No: {umts_signal['ecno']} dB")
+
+        # Fallback to packet data if no current state
+        if not desc_parts:
+            if 'rscp' in data:
+                desc_parts.append(f"RSCP: {data['rscp']} dBm")
+            if 'ecno' in data:
+                desc_parts.append(f"Ec/No: {data['ecno']} dB")
+            if 'psc' in data:
+                desc_parts.append(f"PSC: {data['psc']}")
+            if 'uarfcn' in data:
+                desc_parts.append(f"UARFCN: {data['uarfcn']}")
+
         description = ", ".join(desc_parts) if desc_parts else "UMTS signaling data"
         direction = "DOWN" if "System" in message_title else "UP"
-        
+
+        # Build comprehensive full data
         full_data = f"UMTS {message_title}\n\nTimestamp: {timestamp}\n\n"
+
+        # Add current state information
+        if current_umts.get('uarfcn'):
+            full_data += f"Current UARFCN: {current_umts['uarfcn']}\n"
+        if 'band' in current_umts:
+            full_data += f"Current Band: {current_umts['band']}\n"
+
+        # Add signal quality information
+        if umts_signal.get('rscp'):
+            full_data += f"Latest RSCP: {umts_signal['rscp']} dBm\n"
+        if umts_signal.get('ecno'):
+            full_data += f"Latest Ec/No: {umts_signal['ecno']} dB\n"
+
+        # Add packet-specific data
         if 'cell_id' in data:
             full_data += f"Cell ID: {data['cell_id']}\n"
         if 'uarfcn' in data:
-            full_data += f"UARFCN: {data['uarfcn']}\n"
+            full_data += f"Packet UARFCN: {data['uarfcn']}\n"
         if 'psc' in data:
             full_data += f"PSC: {data['psc']}\n"
-            
+
         return message_title, description, direction, full_data
 
     def _format_gsm_card_data(self, data, timestamp):
         """Format GSM signaling data for card display"""
         message_title = data.get('message_type', 'GSM Message')
-        
+
+        # Build description with key metrics - use latest current state data
         desc_parts = []
-        if 'rxlev' in data:
-            desc_parts.append(f"RxLev: {data['rxlev']}")
-        if 'arfcn' in data:
-            desc_parts.append(f"ARFCN: {data['arfcn']}")
-        if 'bsic' in data:
-            desc_parts.append(f"BSIC: {data['bsic']}")
-            
+
+        # Check current state first (from parser stdout processing)
+        current_gsm = self.current_state.get('gsm', {})
+        if current_gsm.get('arfcn'):
+            desc_parts.append(f"ARFCN: {current_gsm['arfcn']}")
+        if 'band' in current_gsm:
+            desc_parts.append(f"Band: {current_gsm['band']}")
+
+        # Check signal quality from current measurements
+        gsm_signal = self.signaling_info.get('gsm', {}).get('signal_quality', {})
+        if gsm_signal.get('rxlev'):
+            desc_parts.append(f"RxLev: {gsm_signal['rxlev']} dBm")
+
+        # Fallback to packet data if no current state
+        if not desc_parts:
+            if 'rxlev' in data:
+                desc_parts.append(f"RxLev: {data['rxlev']}")
+            if 'arfcn' in data:
+                desc_parts.append(f"ARFCN: {data['arfcn']}")
+            if 'bsic' in data:
+                desc_parts.append(f"BSIC: {data['bsic']}")
+
         description = ", ".join(desc_parts) if desc_parts else "GSM signaling data"
         direction = "DOWN" if "System" in message_title else "UP"
-        
+
+        # Build comprehensive full data
         full_data = f"GSM {message_title}\n\nTimestamp: {timestamp}\n\n"
+
+        # Add current state information
+        if current_gsm.get('arfcn'):
+            full_data += f"Current ARFCN: {current_gsm['arfcn']}\n"
+        if 'band' in current_gsm:
+            full_data += f"Current Band: {current_gsm['band']}\n"
+
+        # Add signal quality information
+        if gsm_signal.get('rxlev'):
+            full_data += f"Latest RxLev: {gsm_signal['rxlev']} dBm\n"
+
+        # Add packet-specific data
         if 'cell_id' in data:
             full_data += f"Cell ID: {data['cell_id']}\n"
         if 'arfcn' in data:
-            full_data += f"ARFCN: {data['arfcn']}\n"
+            full_data += f"Packet ARFCN: {data['arfcn']}\n"
+        if 'bsic' in data:
+            full_data += f"BSIC: {data['bsic']}\n"
         if 'lac' in data:
             full_data += f"LAC: {data['lac']}\n"
-            
+
         return message_title, description, direction, full_data
 
     def _create_description_from_pcap(self, pcap_data, data):

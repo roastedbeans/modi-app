@@ -95,20 +95,13 @@ build_app() {
 
     cd "$PROJECT_DIR"
 
-    # Clean build if requested
-    if [ "$CLEAN_BUILD" = true ]; then
-        print_status "Cleaning build cache..."
-        ./gradlew clean
-    fi
+    # Clean build
+    print_status "Cleaning build cache..."
+    ./gradlew clean
 
     # Build the app
-    if [ "$BUILD_TYPE" = "release" ]; then
-        print_status "Building release APK..."
-        ./gradlew assembleRelease
-    else
-        print_status "Building debug APK..."
-        ./gradlew assembleDebug
-    fi
+    print_status "Building debug APK..."
+    ./gradlew assembleDebug
 
     if [ $? -eq 0 ]; then
         print_success "Build completed successfully!"
@@ -125,11 +118,7 @@ install_app() {
     cd "$PROJECT_DIR"
 
     # Determine APK path
-    if [ "$BUILD_TYPE" = "release" ]; then
-        APK_PATH="app/build/outputs/apk/release/app-release.apk"
-    else
-        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-    fi
+    APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
     # Check if APK exists
     if [ ! -f "$APK_PATH" ]; then
@@ -182,7 +171,7 @@ main() {
         exit 1
     fi
 
-    if ! command -v ./gradlew &> /dev/null && [ ! -f "gradlew" ]; then
+    if ! command -v ./gradlew &> /dev/null  && [ ! -f "gradlew" ]; then
         print_error "Gradle wrapper not found!"
         print_status "Please run this script from the project root directory."
         exit 1

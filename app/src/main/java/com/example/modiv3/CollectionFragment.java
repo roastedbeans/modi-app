@@ -260,40 +260,5 @@ public class CollectionFragment extends Fragment implements QmdlService.QmdlCall
         }
     }
 
-    // Python Integration Methods
-    public void analyzeLogsWithPython() {
-        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
-            updateLog("Running Python log analysis...");
-            qmdlService.analyzeLogsWithPython();
-        } else {
-            updateLog("Python integration not available");
-        }
-    }
 
-    public void generatePythonReport() {
-        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
-            updateLog("Generating Python analysis report...");
-            qmdlService.generatePythonReport();
-        } else {
-            updateLog("Python integration not available");
-        }
-    }
-
-    public void createPythonVisualizations() {
-        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
-            updateLog("Creating Python visualizations...");
-            qmdlService.createPythonVisualizations();
-        } else {
-            updateLog("Python integration not available");
-        }
-    }
-
-    public void extractErrorPatternsWithPython() {
-        if (qmdlService != null && qmdlService.isPythonIntegrationAvailable()) {
-            updateLog("Extracting error patterns with Python...");
-            qmdlService.extractErrorPatternsWithPython();
-        } else {
-            updateLog("Python integration not available");
-        }
-    }
 }
