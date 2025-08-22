@@ -37,6 +37,10 @@
             android:name=".QmdlService"
             android:exported="false" />
 
+        <service
+            android:name=".PythonIntegrationService"
+            android:exported="false" />
+
     </application>
 
 </manifest>
